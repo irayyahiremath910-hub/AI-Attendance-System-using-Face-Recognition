@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Capture & Recognize - AI Attendance System{% endblock %}
+
+{% block extra_css %}
+<style>
+    .camera-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    
+    #video, #canvas {
+        width: 100%;
+        border-radius: 0.75rem;
+        background-color: #000;
+        margin-bottom: 1rem;
+    }
+    
+    .button-group {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 2rem;
+        flex-wrap: wrap;
+    }
+    
+    .button-group .btn {
+        flex: 1;
+        min-width: 150px;
+    }
+    
+    .recognition-result {
+        margin-top: 2rem;
+    }
+    
+    .result-card {
+        background-color: #f0f4ff;
+        border-left: 4px solid #2563eb;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        margin-bottom: 1rem;
+    }
+    
+    .result-card.success {
+        background-color: #dcfce7;
+        border-left-color: #059669;
+    }
+    
+    .result-card.error {
+        background-color: #fee2e2;
+        border-left-color: #dc2626;
+    }
+    
+    .confidence-bar {
+        width: 100%;
+        height: 20px;
+        background-color: #e5e7eb;
+        border-radius: 10px;
+        overflow: hidden;
+        margin: 0.5rem 0;
+    }
+    
+    .confidence-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #059669, #22c55e);
+        transition: width 0.3s ease;
+    }
+    
+    .recognition-list {
+        list-style: none;
+        padding: 0;
+    }
+    
+    .recognition-list li {
+        padding: 0.75rem;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .recognition-list li:last-child {
+        border-bottom: none;
+    }
+    
+    .recognition-list .badge {
+        font-size: 0.9rem;
+    }
+    
+    .timer {
+        display: inline-block;
+        font-size: 2rem;
+        font-weight: 700;
+        color: #2563eb;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="container">
+        <h1><i class="fas fa-face-smile"></i> Face Recognition Attendance</h1>
+        <p>Real-time face recognition for automatic attendance marking</p>
+    </div>
+</div>
+
+<div class="container">
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card camera-container">
+                <div class="card-header">
+                    <i class="fas fa-video"></i> Camera Feed
+                </div>
+                <div class="card-body">
+                    <video id="video" autoplay playsinline></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                    
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="startBtn" onclick="startCamera()">
+                            <i class="fas fa-play"></i> Start Camera
+                        </button>
+                        <button class="btn btn-danger" id="stopBtn" onclick="stopCamera()" style="display:none;">
+                            <i class="fas fa-stop"></i> Stop Camera
+                        </button>
+                        <button class="btn btn-success" id="captureBtn" onclick="captureFrame()" style="display:none;">
+                            <i class="fas fa-camera"></i> Capture
+                        </button>
+                    </div>
+                    
+                    <div id="recognition-result"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-info-circle"></i> Instructions
+                </div>
+                <div class="card-body">
+                    <ol class="mb-0">
+                        <li>Click "Start Camera" to initialize the camera</li>
+                        <li>Face the camera and maintain eye contact</li>
+                        <li>Click "Capture" to capture and recognize your face</li>
+                        <li>System will automatically mark your attendance</li>
+                        <li>Wait for recognition result to appear</li>
+                    </ol>
+                </div>
+            </div>
+            
+            <div class="card mt-3">
+                <div class="card-header">
+                    <i class="fas fa-history"></i> Recent Recognitions
+                </div>
+                <div class="card-body" id="recent-recognitions">
+                    <p class="text-muted text-center">No recognitions yet</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let stream = null;
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    async function startCamera() {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'user' },
+                audio: false 
+            });
+            video.srcObject = stream;
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'inline-block';
+            document.getElementById('captureBtn').style.display = 'inline-block';
+        } catch (error) {
+            alert('Error accessing camera: ' + error.message);
+        }
+    }
+    
+    function stopCamera() {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+        }
+        document.getElementById('startBtn').style.display = 'inline-block';
+        document.getElementById('stopBtn').style.display = 'none';
+        document.getElementById('captureBtn').style.display = 'none';
+    }
+    
+    function captureFrame() {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        
+        // Send to backend for recognition
+        canvas.toBlob(blob => {
+            const formData = new FormData();
+            formData.append('image', blob, 'capture.jpg');
+            
+            fetch('{% url "capture-and-recognize" %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => displayResult(data))
+            .catch(error => console.error('Error:', error));
+        });
+    }
+    
+    function displayResult(data) {
+        const resultDiv = document.getElementById('recognition-result');
+        if (data.success) {
+            resultDiv.innerHTML = `
+                <div class="result-card success">
+                    <i class="fas fa-check-circle me-2"></i>
+                    <strong>Recognition Successful!</strong>
+                    <p>Student: ${data.student_name}</p>
+                    <p>Confidence: ${(data.confidence * 100).toFixed(2)}%</p>
+                </div>
+            `;
+        } else {
+            resultDiv.innerHTML = `
+                <div class="result-card error">
+                    <i class="fas fa-times-circle me-2"></i>
+                    <strong>Recognition Failed</strong>
+                    <p>${data.message}</p>
+                </div>
+            `;
+        }
+    }
+</script>
+{% endblock %}

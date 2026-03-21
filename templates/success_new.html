@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Success - AI Attendance System{% endblock %}
+
+{% block extra_css %}
+<style>
+    .success-container {
+        min-height: 60vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 1rem;
+        margin: 2rem 0;
+    }
+    
+    .success-content {
+        text-align: center;
+        background: white;
+        padding: 3rem;
+        border-radius: 1rem;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15);
+        max-width: 500px;
+        width: 100%;
+    }
+    
+    .success-icon {
+        font-size: 5rem;
+        color: #059669;
+        margin-bottom: 1.5rem;
+        animation: bounce 0.6s;
+    }
+    
+    @keyframes bounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-20px); }
+    }
+    
+    .success-content h1 {
+        font-size: 2rem;
+        color: #1f2937;
+        margin-bottom: 1rem;
+        font-weight: 700;
+    }
+    
+    .success-content p {
+        color: #6b7280;
+        font-size: 1.1rem;
+        margin-bottom: 2rem;
+        line-height: 1.6;
+    }
+    
+    .success-details {
+        background-color: #f3f4f6;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        margin-bottom: 2rem;
+        text-align: left;
+    }
+    
+    .detail-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    
+    .detail-row:last-child {
+        border-bottom: none;
+    }
+    
+    .detail-label {
+        font-weight: 600;
+        color: #4b5563;
+    }
+    
+    .detail-value {
+        color: #059669;
+        font-weight: 700;
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    
+    .action-buttons .btn {
+        padding: 0.75rem 1.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="container">
+        <h1><i class="fas fa-check-circle"></i> Operation Successful</h1>
+    </div>
+</div>
+
+<div class="container">
+    <div class="success-container">
+        <div class="success-content">
+            <div class="success-icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            
+            <h1>{{ message|default:"Success!" }}</h1>
+            
+            <p>
+                {% if description %}
+                    {{ description }}
+                {% else %}
+                    Your operation has been completed successfully.
+                {% endif %}
+            </p>
+            
+            {% if details %}
+            <div class="success-details">
+                {% for key, value in details.items %}
+                    <div class="detail-row">
+                        <span class="detail-label">{{ key }}:</span>
+                        <span class="detail-value">{{ value }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            
+            <div class="action-buttons">
+                <a href="{% url 'home' %}" class="btn btn-primary">
+                    <i class="fas fa-home me-2"></i>Back to Home
+                </a>
+                <a href="{{ return_url|default:'/' }}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left me-2"></i>Go Back
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

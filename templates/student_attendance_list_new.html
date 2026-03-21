@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Attendance Records - AI Attendance System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="container">
+        <h1><i class="fas fa-list-check"></i> Attendance Records</h1>
+        <p>View detailed attendance history and statistics</p>
+    </div>
+</div>
+
+<div class="container">
+    <!-- Filters -->
+    <div class="row mb-4">
+        <div class="col-md-3 mb-2">
+            <label class="form-label">Filter by Student</label>
+            <select class="form-select" id="studentFilter">
+                <option value="">All Students</option>
+                {% for student in students %}
+                    <option value="{{ student.id }}">{{ student.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3 mb-2">
+            <label class="form-label">Filter by Status</label>
+            <select class="form-select" id="statusFilter">
+                <option value="">All Status</option>
+                <option value="present">Present</option>
+                <option value="absent">Absent</option>
+                <option value="late">Late</option>
+            </select>
+        </div>
+        <div class="col-md-3 mb-2">
+            <label class="form-label">From Date</label>
+            <input type="date" class="form-control" id="fromDate">
+        </div>
+        <div class="col-md-3 mb-2">
+            <label class="form-label">To Date</label>
+            <input type="date" class="form-control" id="toDate">
+        </div>
+    </div>
+
+    <!-- Attendance Table -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="fas fa-table"></i> Attendance Records</span>
+            <span class="badge bg-primary">{{ attendance_records|length }} Records</span>
+        </div>
+        <div class="card-body">
+            {% if attendance_records %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th><i class="fas fa-user"></i> Student Name</th>
+                                <th><i class="fas fa-calendar"></i> Date</th>
+                                <th><i class="fas fa-clock"></i> Check In</th>
+                                <th><i class="fas fa-clock"></i> Check Out</th>
+                                <th><i class="fas fa-hourglass"></i> Duration</th>
+                                <th><i class="fas fa-badge-check"></i> Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for record in attendance_records %}
+                                <tr>
+                                    <td><strong>{{ record.student.name }}</strong></td>
+                                    <td>{{ record.date|date:"d M, Y" }}</td>
+                                    <td>
+                                        {% if record.check_in_time %}
+                                            <i class="fas fa-check-circle text-success"></i> {{ record.check_in_time|time:"H:i" }}
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if record.check_out_time %}
+                                            <i class="fas fa-times-circle text-danger"></i> {{ record.check_out_time|time:"H:i" }}
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if record.check_in_time and record.check_out_time %}
+                                            {{ record.calculate_duration }}
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if record.status == 'present' %}
+                                            <span class="badge bg-success"><i class="fas fa-check"></i> Present</span>
+                                        {% elif record.status == 'absent' %}
+                                            <span class="badge bg-danger"><i class="fas fa-times"></i> Absent</span>
+                                        {% elif record.status == 'late' %}
+                                            <span class="badge bg-warning text-dark"><i class="fas fa-clock"></i> Late</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">{{ record.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center py-5">
+                    <i class="fas fa-inbox fa-5x text-muted mb-3" style="opacity: 0.3;"></i>
+                    <p class="text-muted">No attendance records found.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+    // Basic filter functionality (implement as needed)
+    document.getElementById('studentFilter').addEventListener('change', function() {
+        // Implement filter logic
+    });
+</script>
+{% endblock %}
