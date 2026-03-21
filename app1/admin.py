@@ -150,16 +150,3 @@ class AttendanceAlertAdmin(admin.ModelAdmin):
             return format_html('<span style="color: green;">✓ Sent</span>')
         return format_html('<span style="color: orange;">⊙ Pending</span>')
     is_sent_status.short_description = 'Sent Status'
-
-    def save_model(self, request, obj, form, change):
-        if change:  # Editing an existing object
-            # Ensure check-in and check-out times cannot be modified via admin
-            obj.check_in_time = Attendance.objects.get(id=obj.id).check_in_time
-            obj.check_out_time = Attendance.objects.get(id=obj.id).check_out_time
-        super().save_model(request, obj, form, change)
-
-
-@admin.register(CameraConfiguration)
-class CameraConfigurationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'camera_source', 'threshold']
-    search_fields = ['name']
