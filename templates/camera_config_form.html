@@ -5,10 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ config.name|default:"Create Camera Configuration" }}</title>
 
-    <!-- Google Fonts for nice typography -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
 
-    <!-- CSS for styling the form -->
     <style>
         body {
             font-family: 'Poppins', sans-serif;
@@ -140,7 +138,6 @@
     <div class="form-container">
         <h1>{{ config.name|default:"Create Camera Configuration" }}</h1>
         
-        <!-- Display messages here -->
         {% for message in messages %}
             <div class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
                 {{ message }}
