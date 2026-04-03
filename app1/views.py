@@ -19,10 +19,14 @@ import time
 import base64
 from django.db import IntegrityError
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth import authenticate, login
-from django.contrib import messages
-from .models import Student
+from django.http import JsonResponse
+from .forms import (
+    StudentForm,
+    CameraConfigurationForm,
+    AttendanceFilterForm,
+    StudentAuthorizationForm
+)
 
 
 # Initialize MTCNN and InceptionResnetV1
@@ -81,30 +85,44 @@ def recognize_faces(known_encodings, known_names, test_encodings, threshold=0.6)
 # View for capturing student information and image
 def capture_student(request):
     if request.method == 'POST':
-        name = request.POST.get('name')
-        email = request.POST.get('email')
-        phone_number = request.POST.get('phone_number')
-        student_class = request.POST.get('student_class')
-        image_data = request.POST.get('image_data')
+        form = StudentForm(request.POST, request.FILES)
+        if form.is_valid():
+            # Check if image_data is provided from webcam capture
+            image_data = request.POST.get('image_data')
+            
+            if image_data:
+                # Decode the base64 image data from webcam
+                try:
+                    header, encoded = image_data.split(',', 1)
+                    image_file = ContentFile(base64.b64decode(encoded), name=f"{form.cleaned_data['name']}.jpg")
+                    
+                    # Create student with form data
+                    student = form.save(commit=False)
+                    student.image = image_file
+                    student.authorized = False  # Default to False during registration
+                    student.save()
+                    
+                    messages.success(request, f'Student {form.cleaned_data["name"]} registered successfully!')
+                    return redirect('selfie_success')
+                except Exception as e:
+                    messages.error(request, f'Error processing image: {str(e)}')
+            else:
+                # Use uploaded image file
+                student = form.save(commit=False)
+                student.authorized = False  # Default to False during registration
+                student.save()
+                
+                messages.success(request, f'Student {form.cleaned_data["name"]} registered successfully!')
+                return redirect('selfie_success')
+        else:
+            # Pass form with errors back to template
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f'{field}: {error}')
+    else:
+        form = StudentForm()
 
-        # Decode the base64 image data
-        if image_data:
-            header, encoded = image_data.split(',', 1)
-            image_file = ContentFile(base64.b64decode(encoded), name=f"{name}.jpg")
-
-            student = Student(
-                name=name,
-                email=email,
-                phone_number=phone_number,
-                student_class=student_class,
-                image=image_file,
-                authorized=False  # Default to False during registration
-            )
-            student.save()
-
-            return redirect('selfie_success')  # Redirect to a success page
-
-    return render(request, 'capture_student.html')
+    return render(request, 'capture_student.html', {'form': form})
 
 
 # Success view after capturing student information and image
@@ -245,39 +263,62 @@ def capture_and_recognize(request):
 
 #this is for showing Attendance list
 def student_attendance_list(request):
-    # Get the search query and date filter from the request
-    search_query = request.GET.get('search', '')
-    date_filter = request.GET.get('attendance_date', '')
-
-    # Get all students
+    form = AttendanceFilterForm(request.GET)
+    
+    # Get all students initially
     students = Student.objects.all()
-
-    # Filter students based on the search query
-    if search_query:
-        students = students.filter(name__icontains=search_query)
-
-    # Prepare the attendance data
     student_attendance_data = []
-
-    for student in students:
-        # Get the attendance records for each student, filtering by attendance date if provided
-        attendance_records = Attendance.objects.filter(student=student)
-
-        if date_filter:
-            # Assuming date_filter is in the format YYYY-MM-DD
-            attendance_records = attendance_records.filter(date=date_filter)
-
-        attendance_records = attendance_records.order_by('date')
+    
+    # Apply filters if form is valid
+    if form.is_valid():
+        student_filter = form.cleaned_data.get('student')
+        date_from = form.cleaned_data.get('date_from')
+        date_to = form.cleaned_data.get('date_to')
+        status = form.cleaned_data.get('status')
         
-        student_attendance_data.append({
-            'student': student,
-            'attendance_records': attendance_records
-        })
+        # Filter by specific student if selected
+        if student_filter:
+            students = students.filter(pk=student_filter.pk)
+        
+        # Build attendance data with filtering
+        for student in students:
+            attendance_records = Attendance.objects.filter(student=student)
+            
+            # Filter by date range
+            if date_from:
+                attendance_records = attendance_records.filter(date__gte=date_from)
+            if date_to:
+                attendance_records = attendance_records.filter(date__lte=date_to)
+            
+            # Filter by status
+            if status == 'checked_in':
+                attendance_records = attendance_records.filter(check_in_time__isnull=False, check_out_time__isnull=True)
+            elif status == 'checked_out':
+                attendance_records = attendance_records.filter(check_out_time__isnull=False)
+            elif status == 'both':
+                attendance_records = attendance_records.filter(check_in_time__isnull=False, check_out_time__isnull=False)
+            
+            attendance_records = attendance_records.order_by('-date')
+            
+            # Only add students with matching records
+            if attendance_records.exists():
+                student_attendance_data.append({
+                    'student': student,
+                    'attendance_records': attendance_records
+                })
+    else:
+        # Show all attendance data if no filters applied
+        for student in students:
+            attendance_records = Attendance.objects.filter(student=student).order_by('-date')
+            if attendance_records.exists():
+                student_attendance_data.append({
+                    'student': student,
+                    'attendance_records': attendance_records
+                })
 
     context = {
+        'form': form,
         'student_attendance_data': student_attendance_data,
-        'search_query': search_query,  # Pass the search query to the template
-        'date_filter': date_filter       # Pass the date filter to the template
     }
     return render(request, 'student_attendance_list.html', context)
 
@@ -321,12 +362,19 @@ def student_authorize(request, pk):
     student = get_object_or_404(Student, pk=pk)
     
     if request.method == 'POST':
-        authorized = request.POST.get('authorized', False)
-        student.authorized = bool(authorized)
-        student.save()
-        return redirect('student-detail', pk=pk)
+        form = StudentAuthorizationForm(request.POST)
+        if form.is_valid():
+            authorize = form.cleaned_data.get('authorize', False)
+            student.authorized = authorize
+            student.save()
+            
+            status = "authorized" if authorize else "unauthorized"
+            messages.success(request, f'Student {student.name} has been {status}.')
+            return redirect('student-detail', pk=pk)
+    else:
+        form = StudentAuthorizationForm(initial={'student': student, 'authorize': student.authorized})
     
-    return render(request, 'student_authorize.html', {'student': student})
+    return render(request, 'student_authorize.html', {'student': student, 'form': form})
 
 # This views is for Deleting student
 @login_required
@@ -376,31 +424,21 @@ def user_logout(request):
 @login_required
 @user_passes_test(is_admin)
 def camera_config_create(request):
-    # Check if the request method is POST, indicating form submission
     if request.method == "POST":
-        # Retrieve form data from the request
-        name = request.POST.get('name')
-        camera_source = request.POST.get('camera_source')
-        threshold = request.POST.get('threshold')
-
-        try:
-            # Save the data to the database using the CameraConfiguration model
-            CameraConfiguration.objects.create(
-                name=name,
-                camera_source=camera_source,
-                threshold=threshold,
-            )
-            # Redirect to the list of camera configurations after successful creation
+        form = CameraConfigurationForm(request.POST)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Camera configuration created successfully!')
             return redirect('camera_config_list')
+        else:
+            # Pass form errors to template
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f'{field}: {error}')
+    else:
+        form = CameraConfigurationForm()
 
-        except IntegrityError:
-            # Handle the case where a configuration with the same name already exists
-            messages.error(request, "A configuration with this name already exists.")
-            # Render the form again to allow user to correct the error
-            return render(request, 'camera_config_form.html')
-
-    # Render the camera configuration form for GET requests
-    return render(request, 'camera_config_form.html')
+    return render(request, 'camera_config_form.html', {'form': form})
 
 
 # READ: Function to list all camera configurations
@@ -417,25 +455,23 @@ def camera_config_list(request):
 @login_required
 @user_passes_test(is_admin)
 def camera_config_update(request, pk):
-    # Retrieve the specific configuration by primary key or return a 404 error if not found
     config = get_object_or_404(CameraConfiguration, pk=pk)
 
-    # Check if the request method is POST, indicating form submission
     if request.method == "POST":
-        # Update the configuration fields with data from the form
-        config.name = request.POST.get('name')
-        config.camera_source = request.POST.get('camera_source')
-        config.threshold = request.POST.get('threshold')
-        config.success_sound_path = request.POST.get('success_sound_path')
-
-        # Save the changes to the database
-        config.save()  
-
-        # Redirect to the list page after successful update
-        return redirect('camera_config_list')  
+        form = CameraConfigurationForm(request.POST, instance=config)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Camera configuration updated successfully!')
+            return redirect('camera_config_list')
+        else:
+            # Pass form errors to template
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f'{field}: {error}')
+    else:
+        form = CameraConfigurationForm(instance=config)
     
-    # Render the configuration form with the current configuration data for GET requests
-    return render(request, 'camera_config_form.html', {'config': config})
+    return render(request, 'camera_config_form.html', {'form': form, 'config': config})
 
 
 # DELETE: Function to delete a camera configuration
