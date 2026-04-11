@@ -27,6 +27,32 @@ from .forms import (
     AttendanceFilterForm,
     StudentAuthorizationForm
 )
+# Day 3: Error Handling & Logging Imports
+from .error_handlers import (
+    handle_exceptions,
+    handle_face_recognition_errors,
+    handle_database_operations,
+    ErrorContext,
+    log_function_call
+)
+from .exceptions import (
+    FaceDetectionException,
+    FaceEncodingException,
+    InvalidStudentException,
+    AttendanceRecordException
+)
+from .logging_config import (
+    get_app_logger,
+    get_error_logger,
+    get_face_logger,
+    get_database_logger
+)
+
+# Initialize loggers
+app_logger = get_app_logger()
+error_logger = get_error_logger()
+face_logger = get_face_logger()
+database_logger = get_database_logger()
 
 
 # Initialize MTCNN and InceptionResnetV1
@@ -34,53 +60,161 @@ mtcnn = MTCNN(keep_all=True)
 resnet = InceptionResnetV1(pretrained='vggface2').eval()
 
 # Function to detect and encode faces
+@handle_face_recognition_errors
 def detect_and_encode(image):
-    with torch.no_grad():
-        boxes, _ = mtcnn.detect(image)
-        if boxes is not None:
-            faces = []
-            for box in boxes:
-                face = image[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-                if face.size == 0:
-                    continue
-                face = cv2.resize(face, (160, 160))
-                face = np.transpose(face, (2, 0, 1)).astype(np.float32) / 255.0
-                face_tensor = torch.tensor(face).unsqueeze(0)
-                encoding = resnet(face_tensor).detach().numpy().flatten()
-                faces.append(encoding)
-            return faces
-    return []
+    """
+    Detect faces in an image and generate encodings
+    
+    Args:
+        image: OpenCV image (numpy array)
+        
+    Returns:
+        List of face encodings
+        
+    Raises:
+        FaceDetectionException: If face detection fails
+        FaceEncodingException: If face encoding fails
+    """
+    try:
+        if image is None or image.size == 0:
+            raise FaceDetectionException("Invalid or empty image")
+        
+        face_logger.debug(f"Detecting faces in image of size {image.shape}")
+        
+        with torch.no_grad():
+            boxes, _ = mtcnn.detect(image)
+            if boxes is not None:
+                faces = []
+                face_logger.info(f"Found {len(boxes)} face(s) in image")
+                
+                for idx, box in enumerate(boxes):
+                    try:
+                        face = image[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+                        if face.size == 0:
+                            face_logger.warning(f"Face {idx} has zero size, skipping")
+                            continue
+                        
+                        face = cv2.resize(face, (160, 160))
+                        face = np.transpose(face, (2, 0, 1)).astype(np.float32) / 255.0
+                        face_tensor = torch.tensor(face).unsqueeze(0)
+                        encoding = resnet(face_tensor).detach().numpy().flatten()
+                        faces.append(encoding)
+                        face_logger.debug(f"Successfully encoded face {idx}")
+                    except Exception as e:
+                        face_logger.warning(f"Failed to encode face {idx}: {str(e)}")
+                        continue
+                
+                if faces:
+                    face_logger.info(f"Successfully encoded {len(faces)} face(s)")
+                    return faces
+                else:
+                    raise FaceEncodingException("No valid faces could be encoded")
+            else:
+                face_logger.warning("No faces detected in image")
+                return []
+    except Exception as e:
+        error_msg = f"Error in face detection/encoding: {str(e)}"
+        face_logger.error(error_msg)
+        raise FaceDetectionException(error_msg) from e
 
 # Function to encode uploaded images
+@handle_database_operations
+@log_function_call(logger=app_logger)
 def encode_uploaded_images():
+    """
+    Encode all authorized student images for face recognition
+    
+    Returns:
+        Tuple of (known_face_encodings list, known_face_names list)
+    """
     known_face_encodings = []
     known_face_names = []
 
-    # Fetch only authorized images
-    uploaded_images = Student.objects.filter(authorized=True)
+    try:
+        # Fetch only authorized images
+        uploaded_images = Student.objects.filter(authorized=True)
+        database_logger.info(f"Found {uploaded_images.count()} authorized student(s)")
 
-    for student in uploaded_images:
-        image_path = os.path.join(settings.MEDIA_ROOT, str(student.image))
-        known_image = cv2.imread(image_path)
-        known_image_rgb = cv2.cvtColor(known_image, cv2.COLOR_BGR2RGB)
-        encodings = detect_and_encode(known_image_rgb)
-        if encodings:
-            known_face_encodings.extend(encodings)
-            known_face_names.append(student.name)
-
-    return known_face_encodings, known_face_names
+        for student in uploaded_images:
+            try:
+                image_path = os.path.join(settings.MEDIA_ROOT, str(student.image))
+                
+                if not os.path.exists(image_path):
+                    database_logger.warning(f"Image for student {student.name} not found at {image_path}")
+                    continue
+                
+                known_image = cv2.imread(image_path)
+                if known_image is None:
+                    database_logger.warning(f"Failed to read image for student {student.name}")
+                    continue
+                
+                known_image_rgb = cv2.cvtColor(known_image, cv2.COLOR_BGR2RGB)
+                encodings = detect_and_encode(known_image_rgb)
+                
+                if encodings:
+                    known_face_encodings.extend(encodings)
+                    known_face_names.append(student.name)
+                    database_logger.info(f"Successfully encoded image for student {student.name}")
+            except Exception as e:
+                database_logger.error(f"Error encoding image for student {student.name}: {str(e)}")
+                continue
+        
+        database_logger.info(f"Encoding complete: {len(known_face_encodings)} encodings from {len(set(known_face_names))} students")
+        return known_face_encodings, known_face_names
+    
+    except Exception as e:
+        error_msg = f"Error in encode_uploaded_images: {str(e)}"
+        error_logger.error(error_msg, exc_info=True)
+        return [], []
 
 # Function to recognize faces
+@handle_face_recognition_errors
+@log_function_call(logger=face_logger, level='DEBUG')
 def recognize_faces(known_encodings, known_names, test_encodings, threshold=0.6):
+    """
+    Recognize faces by comparing encodings
+    
+    Args:
+        known_encodings: List of known face encodings
+        known_names: List of corresponding student names
+        test_encodings: List of test face encodings
+        threshold: Distance threshold for face matching (default: 0.6)
+        
+    Returns:
+        List of recognized names
+    """
     recognized_names = []
-    for test_encoding in test_encodings:
-        distances = np.linalg.norm(known_encodings - test_encoding, axis=1)
-        min_distance_idx = np.argmin(distances)
-        if distances[min_distance_idx] < threshold:
-            recognized_names.append(known_names[min_distance_idx])
-        else:
-            recognized_names.append('Not Recognized')
-    return recognized_names
+    
+    if not known_encodings:
+        face_logger.warning("No known encodings provided for face recognition")
+        return ['Not Recognized'] * len(test_encodings)
+    
+    try:
+        known_encodings_array = np.array(known_encodings)
+        
+        for test_idx, test_encoding in enumerate(test_encodings):
+            try:
+                distances = np.linalg.norm(known_encodings_array - test_encoding, axis=1)
+                min_distance_idx = np.argmin(distances)
+                min_distance = distances[min_distance_idx]
+                
+                if min_distance < threshold:
+                    recognized_name = known_names[min_distance_idx]
+                    recognized_names.append(recognized_name)
+                    face_logger.info(f"Face {test_idx} recognized as {recognized_name} (distance: {min_distance:.4f})")
+                else:
+                    recognized_names.append('Not Recognized')
+                    face_logger.debug(f"Face {test_idx} not recognized (distance: {min_distance:.4f})")
+            except Exception as e:
+                face_logger.error(f"Error recognizing face {test_idx}: {str(e)}")
+                recognized_names.append('Not Recognized')
+        
+        face_logger.info(f"Recognition complete: {len([n for n in recognized_names if n != 'Not Recognized'])}/{len(recognized_names)} faces recognized")
+        return recognized_names
+    except Exception as e:
+        error_msg = f"Error in face recognition: {str(e)}"
+        face_logger.error(error_msg, exc_info=True)
+        return ['Not Recognized'] * len(test_encodings)
 
 # View for capturing student information and image
 def capture_student(request):
