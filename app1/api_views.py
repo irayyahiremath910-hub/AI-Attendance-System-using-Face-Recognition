@@ -107,6 +107,44 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
             'authorization_rate': round((authorized / total * 100) if total > 0 else 0, 2)
         })
 
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def bulk_authorize(self, request):
+        """Bulk authorize students"""
+        count = request.data.get('count', 10)
+        face_required = request.data.get('face_required', False)
+        
+        queryset = Student.objects.filter(authorized=False)
+        
+        if face_required:
+            queryset = queryset.exclude(face_encoding__isnull=True)
+        
+        queryset = queryset[:count]
+        total = queryset.count()
+        
+        if total == 0:
+            return Response({
+                'error': 'No students found matching criteria'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        updated = queryset.update(authorized=True)
+        
+        total_authorized = Student.objects.filter(authorized=True).count()
+        total_students = Student.objects.count()
+        
+        # Clear cache for updated students
+        for student_id in queryset.values_list('id', flat=True):
+            CacheManager.delete_student_cache(student_id)
+        
+        logger.info(f"Bulk authorized {updated} students via API")
+        
+        return Response({
+            'success': True,
+            'authorized_count': updated,
+            'total_authorized': total_authorized,
+            'total_students': total_students,
+            'authorization_rate': round((total_authorized / total_students * 100) if total_students > 0 else 0, 2)
+        }, status=status.HTTP_200_OK)
+
 
 class AttendanceViewSet(viewsets.ModelViewSet):
     """ViewSet for Attendance model with filtering and actions."""
