@@ -8,6 +8,10 @@ class Student(models.Model):
     student_class = models.CharField(max_length=100)
     image = models.ImageField(upload_to='students/')
     authorized = models.BooleanField(default=False)
+    face_encoding = models.JSONField(null=True, blank=True, help_text="Stored face encoding for recognition")
+    face_recognized = models.BooleanField(default=False, help_text="Whether face has been encoded and ready for recognition")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name

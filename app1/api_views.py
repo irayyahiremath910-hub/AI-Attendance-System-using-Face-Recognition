@@ -15,13 +15,14 @@ from app1.models import Student, Attendance
 from app1.serializers import StudentSerializer, StudentDetailSerializer, AttendanceSerializer, AttendanceSummarySerializer
 from app1.services import AttendanceService, FaceRecognitionService
 from app1.cache_utils import CacheManager
+from app1.face_enrollment import FaceEnrollmentMixin
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class StudentViewSet(viewsets.ModelViewSet):
-    """ViewSet for Student model with full CRUD operations."""
+class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
+    """ViewSet for Student model with full CRUD operations and face enrollment."""
 
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
