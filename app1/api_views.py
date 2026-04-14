@@ -16,6 +16,7 @@ from app1.serializers import StudentSerializer, StudentDetailSerializer, Attenda
 from app1.services import AttendanceService, FaceRecognitionService
 from app1.cache_utils import CacheManager
 from app1.face_enrollment import FaceEnrollmentMixin
+from app1.notification_service import EmailNotificationService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -145,18 +146,65 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
             'authorization_rate': round((total_authorized / total_students * 100) if total_students > 0 else 0, 2)
         }, status=status.HTTP_200_OK)
 
-
-class AttendanceViewSet(viewsets.ModelViewSet):
-    """ViewSet for Attendance model with filtering and actions."""
-
-    queryset = Attendance.objects.all()
-    serializer_class = AttendanceSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        """Filter attendance records by query parameters."""
-        queryset = Attendance.objects.all()
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def send_reminder(self, request, pk=None):
+        """Send attendance reminder email to student"""
+        student = self.get_object()
+        result = EmailNotificationService.send_attendance_reminder(student)
         
+        if result:
+            return Response({
+                'success': True,
+                'message': f'Reminder email sent to {student.email}'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': 'Failed to send reminder email'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def send_report(self, request, pk=None):
+        """Send attendance report email to student"""
+        student = self.get_object()
+        days = request.data.get('days', 7)
+        result = EmailNotificationService.send_attendance_report(student, days)
+        
+        if result:
+            return Response({
+                'success': True,
+                'message': f'Attendance report sent to {student.email}'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': 'Failed to send report email'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def send_bulk_reminders(self, request):
+        """Send bulk reminder notifications"""
+        authorized_only = request.data.get('authorized_only', True)
+        
+        queryset = Student.objects.all()
+        if authorized_only:
+            queryset = queryset.filter(authorized=True)
+        
+        success_count = 0
+        failed_count = 0
+        
+        for student in queryset:
+            if EmailNotificationService.send_attendance_reminder(student):
+                success_count += 1
+            else:
+                failed_count += 1
+        
+        return Response({
+            'success': True,
+            'success_count': success_count,
+            'failed_count': failed_count,
+            'total': success_count + failed_count
+        }, status=status.HTTP_200_OK)
+
+
         # Filter by student
         student_id = self.request.query_params.get('student_id')
         if student_id:
