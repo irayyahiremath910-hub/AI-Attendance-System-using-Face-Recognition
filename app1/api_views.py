@@ -17,6 +17,7 @@ from app1.services import AttendanceService, FaceRecognitionService
 from app1.cache_utils import CacheManager
 from app1.face_enrollment import FaceEnrollmentMixin
 from app1.notification_service import EmailNotificationService
+from app1.analytics_service import AttendanceAnalyticsService
 import logging
 
 logger = logging.getLogger(__name__)
