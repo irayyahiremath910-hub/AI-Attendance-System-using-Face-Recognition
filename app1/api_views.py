@@ -1,7 +1,7 @@
-"""REST API Views for AI Attendance System
+"""REST API Views for AI Attendance System - Day 7: Advanced Features
 
-This module provides ViewSets and Views for the REST API endpoints.
-These views use the service layer and serializers for clean, maintainable code.
+This module provides enhanced ViewSets with pagination, filtering, ordering,
+and bulk operations for the REST API endpoints.
 """
 
 from rest_framework import viewsets, status
@@ -9,27 +9,50 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.views import APIView
+from rest_framework_filters import filters as drf_filters
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.db.models import Q, Count, Avg
 from app1.models import Student, Attendance
-from app1.serializers import StudentSerializer, StudentDetailSerializer, AttendanceSerializer, AttendanceSummarySerializer
+from app1.serializers import (
+    StudentSerializer, StudentDetailSerializer, 
+    AttendanceSerializer, AttendanceSummarySerializer
+)
 from app1.services import AttendanceService, FaceRecognitionService
 from app1.cache_utils import CacheManager
 from app1.face_enrollment import FaceEnrollmentMixin
 from app1.notification_service import EmailNotificationService
 from app1.analytics_service import AttendanceAnalyticsService
+from app1.api_filters import StudentFilter, AttendanceFilter
+from app1.api_pagination import (
+    StandardPagination, StudentCursorPagination, 
+    AttendanceCursorPagination, StandardOrdering
+)
+from app1.api_validators import (
+    StudentDataValidator, AttendanceDataValidator, 
+    BulkOperationValidator, QueryParamValidator
+)
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
-    """ViewSet for Student model with full CRUD operations and face enrollment."""
+    """Enhanced ViewSet for Student model with filtering, pagination, and bulk operations."""
 
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'pk'
+    
+    # Pagination and filtering configuration
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = StudentFilter
+    search_fields = ['name', 'email', 'student_class']
+    ordering_fields = StandardOrdering.STUDENT_ORDERING_FIELDS
+    ordering = StandardOrdering.STUDENT_DEFAULT_ORDERING
 
     def get_serializer_class(self):
         """Return detail serializer for retrieve action."""
@@ -38,31 +61,43 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
         return StudentSerializer
 
     def get_queryset(self):
-        """Filter queryset based on query parameters."""
+        """Optimize queryset with prefetch_related."""
         queryset = Student.objects.all()
         
-        # Filter by authorization status
-        authorized = self.request.query_params.get('authorized')
-        if authorized is not None:
-            authorized_bool = authorized.lower() == 'true'
-            queryset = queryset.filter(authorized=authorized_bool)
+        # Optimize for list views
+        if self.action == 'list':
+            queryset = queryset.prefetch_related('attendance_set')
         
-        # Search by name or email
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search) | Q(email__icontains=search)
-            )
-        
-        return queryset.order_by('-created_at')
+        return queryset
 
     def get_permissions(self):
         """Set permissions based on action."""
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_authorize', 'send_bulk_reminders']:
             permission_classes = [IsAuthenticated, IsAdminUser]
         else:
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
+
+    def perform_create(self, serializer):
+        """Create student with validation."""
+        try:
+            name = StudentDataValidator.validate_name(serializer.validated_data.get('name', ''))
+            email = StudentDataValidator.validate_email(serializer.validated_data.get('email', ''))
+            serializer.save()
+            logger.info(f"Student created: {name} ({email})")
+        except Exception as e:
+            logger.error(f"Error creating student: {str(e)}")
+            raise
+
+    def perform_update(self, serializer):
+        """Update student with validation and cache clearing."""
+        try:
+            serializer.save()
+            CacheManager.delete_student_cache(self.get_object().id)
+            logger.info(f"Student updated: {serializer.instance.name}")
+        except Exception as e:
+            logger.error(f"Error updating student: {str(e)}")
+            raise
 
     @action(detail=True, methods=['post'])
     def authorize(self, request, pk=None):
@@ -70,8 +105,6 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
         student = self.get_object()
         student.authorized = True
         student.save()
-        
-        # Clear cache when authorizing
         CacheManager.delete_student_cache(student.id)
         
         return Response(
@@ -81,61 +114,64 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def attendance_history(self, request, pk=None):
-        """Get attendance history for a student."""
+        """Get attendance history for a student with pagination."""
         student = self.get_object()
         days = int(request.query_params.get('days', 30))
         
-        attendance_records = AttendanceService.get_student_attendance_history(student, days)
-        serializer = AttendanceSerializer(attendance_records, many=True)
+        try:
+            QueryParamValidator.validate_page_size(request.query_params.get('page_size', 20))
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
-        return Response({
+        attendance_records = AttendanceService.get_student_attendance_history(student, days)
+        
+        # Paginate results
+        paginator = StandardPagination()
+        paginated_records = paginator.paginate_queryset(attendance_records, request)
+        serializer = AttendanceSerializer(paginated_records, many=True)
+        
+        return paginator.get_paginated_response({
             'student': student.name,
             'days': days,
-            'records': serializer.data,
-            'total': attendance_records.count()
+            'total_records': attendance_records.count(),
+            'records': serializer.data
         })
 
     @action(detail=False, methods=['get'])
     def summary(self, request):
-        """Get summary statistics for all students."""
+        """Get comprehensive summary statistics for all students."""
         total = Student.objects.count()
         authorized = Student.objects.filter(authorized=True).count()
-        unauthorized = Student.objects.filter(authorized=False).count()
+        unauthorized = total - authorized
+        
+        # Calculate attendance rate
+        avg_attendance = Attendance.objects.aggregate(Avg('id')).get('id__avg') or 0
         
         return Response({
             'total_students': total,
             'authorized': authorized,
             'unauthorized': unauthorized,
-            'authorization_rate': round((authorized / total * 100) if total > 0 else 0, 2)
+            'authorization_rate': round((authorized / total * 100) if total > 0 else 0, 2),
+            'timestamp': datetime.now().isoformat()
         })
 
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
     def bulk_authorize(self, request):
-        """Bulk authorize students"""
-        count = request.data.get('count', 10)
-        face_required = request.data.get('face_required', False)
+        """Bulk authorize students with validation."""
+        try:
+            student_ids = BulkOperationValidator.validate_bulk_ids(request.data.get('student_ids', []))
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
-        queryset = Student.objects.filter(authorized=False)
-        
-        if face_required:
-            queryset = queryset.exclude(face_encoding__isnull=True)
-        
-        queryset = queryset[:count]
-        total = queryset.count()
-        
-        if total == 0:
-            return Response({
-                'error': 'No students found matching criteria'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+        queryset = Student.objects.filter(id__in=student_ids, authorized=False)
         updated = queryset.update(authorized=True)
-        
-        total_authorized = Student.objects.filter(authorized=True).count()
-        total_students = Student.objects.count()
         
         # Clear cache for updated students
         for student_id in queryset.values_list('id', flat=True):
             CacheManager.delete_student_cache(student_id)
+        
+        total_authorized = Student.objects.filter(authorized=True).count()
+        total_students = Student.objects.count()
         
         logger.info(f"Bulk authorized {updated} students via API")
         
@@ -149,40 +185,18 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
     def send_reminder(self, request, pk=None):
-        """Send attendance reminder email to student"""
+        """Send attendance reminder email to student."""
         student = self.get_object()
         result = EmailNotificationService.send_attendance_reminder(student)
         
-        if result:
-            return Response({
-                'success': True,
-                'message': f'Reminder email sent to {student.email}'
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                'error': 'Failed to send reminder email'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
-    def send_report(self, request, pk=None):
-        """Send attendance report email to student"""
-        student = self.get_object()
-        days = request.data.get('days', 7)
-        result = EmailNotificationService.send_attendance_report(student, days)
-        
-        if result:
-            return Response({
-                'success': True,
-                'message': f'Attendance report sent to {student.email}'
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                'error': 'Failed to send report email'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({
+            'success': result,
+            'message': f'Reminder email sent to {student.email}' if result else 'Failed to send reminder'
+        }, status=status.HTTP_200_OK if result else status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
     def send_bulk_reminders(self, request):
-        """Send bulk reminder notifications"""
+        """Send bulk reminder notifications to students."""
         authorized_only = request.data.get('authorized_only', True)
         
         queryset = Student.objects.all()
@@ -198,6 +212,8 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
             else:
                 failed_count += 1
         
+        logger.info(f"Sent {success_count} reminders, {failed_count} failed")
+        
         return Response({
             'success': True,
             'success_count': success_count,
@@ -205,29 +221,63 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
             'total': success_count + failed_count
         }, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def bulk_delete(self, request):
+        """Delete multiple students by IDs."""
+        try:
+            student_ids = BulkOperationValidator.validate_bulk_ids(request.data.get('student_ids', []))
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        queryset = Student.objects.filter(id__in=student_ids)
+        count = queryset.count()
+        
+        # Clear cache before deletion
+        for student_id in student_ids:
+            CacheManager.delete_student_cache(student_id)
+        
+        queryset.delete()
+        logger.info(f"Bulk deleted {count} students")
+        
+        return Response({
+            'success': True,
+            'deleted_count': count
+        }, status=status.HTTP_200_OK)
 
-        # Filter by student
-        student_id = self.request.query_params.get('student_id')
-        if student_id:
-            queryset = queryset.filter(student_id=student_id)
+
+class AttendanceViewSet(viewsets.ModelViewSet):
+    """Enhanced ViewSet for Attendance model with filtering, pagination, and analytics."""
+
+    queryset = Attendance.objects.all()
+    serializer_class = AttendanceSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'pk'
+    
+    # Pagination and filtering configuration
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = AttendanceFilter
+    search_fields = ['student__name', 'student__email']
+    ordering_fields = StandardOrdering.ATTENDANCE_ORDERING_FIELDS
+    ordering = StandardOrdering.ATTENDANCE_DEFAULT_ORDERING
+
+    def get_queryset(self):
+        """Optimize queryset with select_related."""
+        queryset = Attendance.objects.all()
         
-        # Filter by date
-        date_from = self.request.query_params.get('date_from')
-        if date_from:
-            queryset = queryset.filter(date__gte=date_from)
+        # Optimize for list views
+        if self.action == 'list':
+            queryset = queryset.select_related('student')
         
-        date_to = self.request.query_params.get('date_to')
-        if date_to:
-            queryset = queryset.filter(date__lte=date_to)
-        
-        # Filter by status
-        status_filter = self.request.query_params.get('status')
-        if status_filter == 'checked_in':
-            queryset = queryset.filter(check_in_time__isnull=False, check_out_time__isnull=True)
-        elif status_filter == 'checked_out':
-            queryset = queryset.filter(check_out_time__isnull=False)
-        
-        return queryset.order_by('-date')
+        return queryset
+
+    def get_permissions(self):
+        """Set permissions based on action."""
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_checkout']:
+            permission_classes = [IsAuthenticated, IsAdminUser]
+        else:
+            permission_classes = [IsAuthenticated]
+        return [permission() for permission in permission_classes]
 
     @action(detail=True, methods=['post'])
     def check_in(self, request, pk=None):
@@ -240,10 +290,7 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
                 {'status': 'Checked in', 'attendance': AttendanceSerializer(result).data},
                 status=status.HTTP_200_OK
             )
-        return Response(
-            {'error': 'Cannot check in'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Cannot check in'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def check_out(self, request, pk=None):
@@ -256,33 +303,79 @@ class StudentViewSet(FaceEnrollmentMixin, viewsets.ModelViewSet):
                 {'status': 'Checked out', 'attendance': AttendanceSerializer(result).data},
                 status=status.HTTP_200_OK
             )
-        return Response(
-            {'error': 'Cannot check out'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Cannot check out'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['get'])
     def daily_summary(self, request):
         """Get daily attendance summary."""
-        date = request.query_params.get('date')
-        summary = AttendanceService.get_daily_attendance_summary(date)
+        date_str = request.query_params.get('date')
+        summary = AttendanceService.get_daily_attendance_summary(date_str)
         serializer = AttendanceSummarySerializer(summary)
         return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def pending_checkout(self, request):
         """Get all students pending checkout."""
-        from django.db.models import Q
         pending = Attendance.objects.filter(
             check_in_time__isnull=False,
             check_out_time__isnull=True
         ).select_related('student')
         
-        serializer = AttendanceSerializer(pending, many=True)
-        return Response({
+        # Paginate results
+        paginator = StandardPagination()
+        paginated_records = paginator.paginate_queryset(pending, request)
+        serializer = AttendanceSerializer(paginated_records, many=True)
+        
+        return paginator.get_paginated_response({
             'pending_count': pending.count(),
             'records': serializer.data
         })
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def bulk_checkout(self, request):
+        """Bulk checkout multiple students."""
+        try:
+            attendance_ids = BulkOperationValidator.validate_bulk_ids(request.data.get('attendance_ids', []))
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        queryset = Attendance.objects.filter(
+            id__in=attendance_ids,
+            check_out_time__isnull=True
+        )
+        
+        updated = 0
+        for attendance in queryset:
+            result = AttendanceService.mark_check_out(attendance.student, attendance.date)
+            if result:
+                updated += 1
+        
+        logger.info(f"Bulk checked out {updated} attendances")
+        
+        return Response({
+            'success': True,
+            'checkout_count': updated,
+            'total_requested': len(attendance_ids)
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def bulk_delete(self, request):
+        """Delete multiple attendance records."""
+        try:
+            attendance_ids = BulkOperationValidator.validate_bulk_ids(request.data.get('attendance_ids', []))
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        queryset = Attendance.objects.filter(id__in=attendance_ids)
+        count = queryset.count()
+        queryset.delete()
+        
+        logger.info(f"Bulk deleted {count} attendance records")
+        
+        return Response({
+            'success': True,
+            'deleted_count': count
+        }, status=status.HTTP_200_OK)
 
 
 class StudentDetailView(APIView):
@@ -298,7 +391,7 @@ class StudentDetailView(APIView):
         # Add recent attendance records
         recent_attendance = Attendance.objects.filter(
             student=student
-        ).order_by('-date')[:10]
+        ).select_related('student').order_by('-date')[:10]
         
         data = serializer.data
         data['recent_attendance'] = AttendanceSerializer(recent_attendance, many=True).data
@@ -312,8 +405,10 @@ class StudentDetailView(APIView):
         
         if serializer.is_valid():
             serializer.save()
-            # Clear cache when updating
             CacheManager.delete_student_cache(student.id)
             return Response(serializer.data)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+from datetime import datetime
