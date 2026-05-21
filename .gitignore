@@ -48,6 +48,27 @@ staticfiles/
 *.swo
 *~
 .DS_Store
+
+# Testing
+pytest_cache/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.env.production
+.env.production.local
+
+# Development
+logs/
+*.wav
+celerybeat-schedule
+*.pid
+
+# Backups
+*.bak
+*.backup
 *.sublime-project
 *.sublime-workspace
 
