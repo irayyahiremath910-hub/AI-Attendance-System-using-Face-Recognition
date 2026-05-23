@@ -50,6 +50,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.middleware.gzip.GZipMiddleware',  # Compress responses for faster delivery
 ]
 
 ROOT_URLCONF = 'Project101.urls'
@@ -126,3 +127,21 @@ MEDIA_ROOT = os.path.join(BASE_DIR, config('MEDIA_ROOT', default='media/'))
 
 
 LOGIN_URL = 'login'  # Example: 'login' if your login URL is '/login/'
+
+
+# ==============================================================================
+# SECURITY HEADERS & CONFIGURATION
+# ==============================================================================
+
+# Security Middleware Settings
+SECURE_BROWSER_XSS_FILTER = config('SECURE_BROWSER_XSS_FILTER', default=True, cast=bool)
+X_FRAME_OPTIONS = config('X_FRAME_OPTIONS', default='DENY')
+SECURE_CONTENT_SECURITY_POLICY = config(
+    'SECURE_CONTENT_SECURITY_POLICY',
+    default="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+)
+
+# HTTP Strict Transport Security (HSTS)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31536000, cast=int)  # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=True, cast=bool)
+SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=True, cast=bool)
