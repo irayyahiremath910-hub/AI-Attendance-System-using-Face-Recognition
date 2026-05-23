@@ -117,12 +117,28 @@ USE_TZ = config('USE_TZ', default=True, cast=bool)
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
-STATIC_URL = config('STATIC_URL', default='static/')
+STATIC_URL = config('STATIC_URL', default='/static/')
+STATIC_ROOT = os.path.join(BASE_DIR, config('STATIC_ROOT', default='staticfiles/'))
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+] if os.path.isdir(os.path.join(BASE_DIR, 'static')) else []
+
+# Cache static files for better performance
+STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Media files (User-uploaded files)
 MEDIA_URL = config('MEDIA_URL', default='/media/')
 MEDIA_ROOT = os.path.join(BASE_DIR, config('MEDIA_ROOT', default='media/'))
+
+# File upload settings
+MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=10485760, cast=int)  # 10MB default
+ALLOWED_FILE_EXTENSIONS = config(
+    'ALLOWED_FILE_EXTENSIONS',
+    default='jpg,jpeg,png,gif,pdf,doc,docx,txt,xlsx,csv,zip',
+    cast=lambda x: x.split(',')
+)
 
 
 
@@ -159,3 +175,35 @@ CSRF_COOKIE_SAMESITE = config('CSRF_COOKIE_SAMESITE', default='Strict')
 SESSION_COOKIE_SAMESITE = config('SESSION_COOKIE_SAMESITE', default='Strict')
 SESSION_COOKIE_AGE = config('SESSION_COOKIE_AGE', default=86400, cast=int)  # 24 hours
 SESSION_EXPIRE_AT_BROWSER_CLOSE = config('SESSION_EXPIRE_AT_BROWSER_CLOSE', default=False, cast=bool)
+
+
+# ==============================================================================
+# STORAGE CONFIGURATION (AWS S3, Azure Blob, or Local)
+# ==============================================================================
+
+# AWS S3 Configuration (if using cloud storage)
+USE_S3 = config('USE_S3', default=False, cast=bool)
+
+if USE_S3:
+    # S3 Storage Settings
+    AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID', default='')
+    AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY', default='')
+    AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME', default='')
+    AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='us-east-1')
+    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+    AWS_DEFAULT_ACL = 'public-read'
+    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+    
+    # Use S3 for both static and media files
+    STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+    MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
+    STATIC_ROOT = 'static/'
+    MEDIA_ROOT = 'media/'
+
+# Azure Blob Storage Configuration (alternative to S3)
+USE_AZURE = config('USE_AZURE', default=False, cast=bool)
+
+if USE_AZURE:
+    AZURE_ACCOUNT_NAME = config('AZURE_ACCOUNT_NAME', default='')
+    AZURE_ACCOUNT_KEY = config('AZURE_ACCOUNT_KEY', default='')
+    AZURE_CONTAINER = config('AZURE_CONTAINER', default='media')
